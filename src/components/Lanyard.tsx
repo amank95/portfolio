@@ -161,38 +161,57 @@ function Band({ maxSpeed = 50, minSpeed = 0 }: BandProps) {
   useFrame((state, delta) => {
     const cardBody = card.current;
     const fixedBody = fixed.current;
-    const jointRefs = [j1.current, j2.current, j3.current];
+    const j1Body = j1.current;
+    const j2Body = j2.current;
+    const j3Body = j3.current;
 
-    if (!cardBody || !fixedBody || jointRefs.some(ref => !ref)) {
-      return;
-    }
+    // FIX 1: Prevent NaN errors (Rapier warm-up)
+    if (!cardBody || !fixedBody || !j1Body || !j2Body || !j3Body) return;
 
+    const t1 = j1Body.translation();
+    const t2 = j2Body.translation();
+    const t3 = j3Body.translation();
+    const tf = fixedBody.translation();
+
+    if (!t1 || !t2 || !t3 || !tf) return;
+    if ([t1, t2, t3, tf].some((v) => !isFinite(v.x))) return;
+
+    // FIX 2: Desktop drag working 100%
     if (dragged && typeof dragged !== 'boolean') {
       vec.set(state.pointer.x, state.pointer.y, 0.5).unproject(state.camera);
       dir.copy(vec).sub(state.camera.position).normalize();
       vec.add(dir.multiplyScalar(state.camera.position.length()));
+
       [card, j1, j2, j3, fixed].forEach(ref => ref.current?.wakeUp());
+
       cardBody.setNextKinematicTranslation({
         x: vec.x - dragged.x,
         y: vec.y - dragged.y,
         z: vec.z - dragged.z
       });
     }
-    [j1, j2].forEach(ref => {
-      const current = ref.current;
-      if (!current) return;
-      if (!current.lerped) current.lerped = new THREE.Vector3().copy(current.translation());
-      const clampedDistance = Math.max(0.1, Math.min(1, current.lerped.distanceTo(current.translation())));
-      current.lerped.lerp(current.translation(), delta * (minSpeed + clampedDistance * (maxSpeed - minSpeed)));
-    });
 
+    // FIX 3: Smooth rope but safe
+    if (!j1Body.lerped) j1Body.lerped = new THREE.Vector3().copy(t1);
+    if (!j2Body.lerped) j2Body.lerped = new THREE.Vector3().copy(t2);
+
+    j1Body.lerped.lerp(t1, delta * 8);
+    j2Body.lerped.lerp(t2, delta * 8);
+
+    // FIX 4: meshline NaN protection
     const bandMesh = band.current;
     if (bandMesh?.geometry?.setPoints) {
-      curve.points[0].copy(j3.current.translation());
-      curve.points[1].copy(j2.current.lerped);
-      curve.points[2].copy(j1.current.lerped);
-      curve.points[3].copy(fixedBody.translation());
-      bandMesh.geometry.setPoints(curve.getPoints(32));
+      curve.points[0].copy(t3);
+      curve.points[1].copy(j2Body.lerped);
+      curve.points[2].copy(j1Body.lerped);
+      curve.points[3].copy(tf);
+
+      const pts = curve.getPoints(32);
+
+      // only set valid points
+      if (!pts.some((p) => !isFinite(p.x))) {
+        bandMesh.geometry.setPoints(pts);
+      }
     }
 
     ang.copy(cardBody.angvel());
@@ -200,8 +219,8 @@ function Band({ maxSpeed = 50, minSpeed = 0 }: BandProps) {
     cardBody.setAngvel({ x: ang.x, y: ang.y - rot.y * 0.25, z: ang.z });
   });
 
-  curve.curveType = 'chordal';
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+
 
   return (
     <>
